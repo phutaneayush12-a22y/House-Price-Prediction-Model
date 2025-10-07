@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>🏠 House Price Predictor</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        :root {
+            --accent: #6c63ff;
+            --card-bg: #ffffff;
+            --bg1: #74ebd5;
+            --bg2: #ACB6E5;
+            --danger: #e74c3c;
+            --success: #2d862d;
+        }
+        html,body { height:100%; margin:0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg,var(--bg1),var(--bg2));
+            display:flex; align-items:center; justify-content:center; padding:20px;
+        }
+        .container {
+            width:100%; max-width:560px;
+            background:var(--card-bg);
+            border-radius:14px;
+            padding:26px;
+            box-shadow:0 10px 30px rgba(0,0,0,0.18);
+        }
+        h1 {
+            margin:0 0 14px 0;
+            font-size:22px;
+            color:#222;
+            display:flex; align-items:center; gap:10px;
+        }
+        .grid {
+            display:grid;
+            grid-template-columns: 1fr 1fr;
+            gap:12px 12px;
+            margin-top:10px;
+        }
+        label { display:block; font-size:13px; color:#333; margin-bottom:6px; font-weight:600; }
+        input[type="number"] {
+            width:100%;
+            box-sizing:border-box;
+            padding:10px 12px;
+            border-radius:8px;
+            border:1.5px solid #e6e6e6;
+            font-size:14px;
+            transition: box-shadow .18s, border-color .18s, transform .06s;
+        }
+        input[type="number"]:focus { outline:none; border-color:var(--accent); box-shadow:0 6px 18px rgba(108,99,255,0.12); transform: translateY(-1px); }
+        .controls { margin-top:16px; display:flex; gap:12px; align-items:center; }
+        #predictBtn {
+            flex:1;
+            background:var(--accent);
+            color:white;
+            padding:11px 14px;
+            border-radius:10px;
+            border:none;
+            font-weight:700;
+            cursor:pointer;
+            font-size:15px;
+            transition: transform .12s, box-shadow .12s;
+        }
+        #predictBtn:disabled { opacity:0.7; cursor:not-allowed; transform:none; box-shadow:none; }
+        #predictBtn:hover:not(:disabled) { transform: translateY(-3px); box-shadow:0 10px 25px rgba(0,0,0,0.12); }
+        .error { color:var(--danger); margin-top:12px; font-weight:700; }
+        .result {
+            margin-top:14px;
+            padding:12px;
+            border-radius:10px;
+            background:#f0fff0;
+            border:2px solid #c6f0c6;
+            color:var(--success);
+            font-weight:700;
+        }
+        .meta { margin-top:8px; font-size:13px; color:#333; }
+        /* responsive */
+        @media (max-width:520px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏠 House Price Prediction</h1>
+
+        <div id="inputs" class="grid">
+            {% for feature in features %}
+                <!-- Use a safe sanitized id (no spaces/special chars) and keep original name in data-name -->
+                <div>
+                    <label for="f{{ loop.index }}">{{ feature }}</label>
+                    <input
+                        type="number"
+                        id="f{{ loop.index }}"
+                        data-name="{{ feature|e }}"
+                        placeholder="Enter {{ feature }}"
+                        step="any"
+                        min="0"
+                        {% if 'room' in feature.lower() %} max="50" title="Max 50" {% endif %}
+                    >
+                </div>
+            {% endfor %}
+        </div>
+
+        <div class="controls">
+            <button id="predictBtn" onclick="predictPrice()">Predict</button>
+        </div>
+
+        <div id="error" class="error" role="alert" aria-live="assertive"></div>
+        <div id="result" class="result" style="display:none;" aria-live="polite"></div>
+        <div id="meta" class="meta"></div>
+    </div>
+
+    <script>
+        async function predictPrice() {
+            const errorEl = document.getElementById("error");
+            const resultEl = document.getElementById("result");
+            const metaEl = document.getElementById("meta");
+            const btn = document.getElementById("predictBtn");
+
+            errorEl.innerText = "";
+            metaEl.innerText = "";
+            resultEl.style.display = "none";
+            resultEl.innerHTML = "";
+
+            // Collect inputs from DOM (safe even if feature names have spaces/symbols)
+            const inputs = Array.from(document.querySelectorAll("#inputs input"));
+            const payload = {};
+            for (const inp of inputs) {
+                const name = inp.dataset.name || inp.id;
+                const raw = inp.value.trim();
+                if (raw === "") {
+                    errorEl.innerText = "⚠️ Please fill in all features before predicting.";
+                    inp.focus();
+                    return;
+                }
+                const num = Number(raw);
+                if (Number.isNaN(num)) {
+                    errorEl.innerText = `⚠️ ${name} must be a valid number.`;
+                    inp.focus();
+                    return;
+                }
+                if (num < 0) {
+                    errorEl.innerText = `⚠️ ${name} cannot be negative.`;
+                    inp.focus();
+                    return;
+                }
+                if (inp.hasAttribute("max")) {
+                    const max = Number(inp.getAttribute("max"));
+                    if (!Number.isNaN(max) && num > max) {
+                        errorEl.innerText = `⚠️ ${name} seems too large (max ${max}).`;
+                        inp.focus();
+                        return;
+                    }
+                }
+
+                // Use the original feature name as key (from data-name)
+                payload[name] = num;
+            }
+
+            // disable button and show loading state
+            btn.disabled = true;
+            btn.innerText = "Predicting...";
+
+            try {
+                const res = await fetch("/predict", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                const json = await res.json();
+
+                if (json.error) {
+                    errorEl.innerText = json.error;
+                } else {
+                    // predicted_price might be a formatted string like "$123,456.00"
+                    const priceStr = json.predicted_price ?? json.predictedPrice ?? "";
+                    const selectedFeatures = json.selected_features ?? Object.keys(payload);
+                    // training/test r2 may be numeric or string
+                    const trainR2 = (typeof json.train_r2 === "number") ? json.train_r2.toFixed(3) : (json.train_r2 ?? "");
+                    const testR2 = (typeof json.test_r2 === "number") ? json.test_r2.toFixed(3) : (json.test_r2 ?? "");
+
+                    resultEl.style.display = "block";
+                    resultEl.innerHTML = `✅ <strong>Predicted House Price:</strong> ${priceStr}`;
+
+                    metaEl.innerHTML = `<strong>Selected features:</strong> ${selectedFeatures.join(", ")}<br>` +
+                                        `<strong>Training R²:</strong> ${trainR2}, <strong>Testing R²:</strong> ${testR2}`;
+                }
+            } catch (e) {
+                console.error(e);
+                errorEl.innerText = "❌ Error connecting to server. Is your Flask backend running?";
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Predict";
+            }
+        }
+    </script>
+</body>
+</html>
